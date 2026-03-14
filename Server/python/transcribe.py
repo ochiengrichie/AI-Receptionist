@@ -11,18 +11,17 @@ def main():
 
     try:
         model = WhisperModel("base", compute_type="int8")
-        segments, info = model.transcribe(audio_path)
 
-        transcript_parts = []
-        for segment in segments:
-            transcript_parts.append(segment.text.strip())
+        segments, info = model.transcribe(audio_path, language="en", task="transcribe")
 
+        transcript_parts = [segment.text.strip() for segment in segments]
         transcript = " ".join(transcript_parts).strip()
 
         print(json.dumps({
             "transcript": transcript,
             "language": info.language,
-            "duration": info.duration
+            "duration": info.duration,
+            "segments": [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments]
         }))
     except Exception as e:
         print(json.dumps({"error": str(e)}))

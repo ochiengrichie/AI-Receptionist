@@ -1,9 +1,20 @@
 import { useRef, useState } from "react";
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+
+function createSessionId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export default function App() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
+  const sessionIdRef = useRef(createSessionId());
 
   // Holds the currently playing AI audio so we can stop/replace it cleanly
   const audioRef = useRef(null);
@@ -12,6 +23,7 @@ export default function App() {
   const [status, setStatus] = useState("Idle");
   const [transcript, setTranscript] = useState("No transcript yet");
   const [aiReply, setAiReply] = useState("No AI reply yet");
+  const [businessInfo, setBusinessInfo] = useState(null);
 
   // Helper: stop microphone stream safely
   const stopMicrophoneStream = () => {
@@ -34,7 +46,7 @@ export default function App() {
   const speakAIReply = async (text) => {
     setStatus("Generating speech...");
 
-    const ttsResponse = await fetch("http://localhost:3000/tts", {
+    const ttsResponse = await fetch(`${API_BASE}/tts`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -48,16 +60,17 @@ export default function App() {
       throw new Error(ttsData.error || "Failed to generate speech");
     }
 
-    if (!ttsData.audioUrl) {
-      throw new Error("No audio URL returned from TTS");
-    }
-
     // Stop previous audio before playing a new one
     stopCurrentAudio();
 
     setStatus("AI speaking...");
 
-    const audio = new Audio(ttsData.audioUrl);
+    const audioSource = ttsData.audioUrl || `${API_BASE}${ttsData.audioPath || ""}`;
+    if (!audioSource) {
+      throw new Error("No audio URL returned from TTS");
+    }
+
+    const audio = new Audio(audioSource);
     audioRef.current = audio;
 
     // When playback ends, update status
@@ -117,7 +130,7 @@ export default function App() {
 
         try {
           // 1) Speech-to-Text
-          const transcribeResponse = await fetch("http://localhost:3000/transcribe", {
+          const transcribeResponse = await fetch(`${API_BASE}/transcribe`, {
             method: "POST",
             body: formData,
           });
@@ -140,13 +153,14 @@ export default function App() {
           // 2) Send transcript to AI
           setStatus("Generating AI reply...");
 
-          const aiResponse = await fetch("http://localhost:3000/ai", {
+          const aiResponse = await fetch(`${API_BASE}/ai`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
               message: returnedTranscript,
+              sessionId: sessionIdRef.current,
             }),
           });
 
@@ -157,6 +171,12 @@ export default function App() {
           }
 
           const reply = aiData.reply?.trim() || "No AI reply returned";
+          if (aiData.sessionId) {
+            sessionIdRef.current = aiData.sessionId;
+          }
+          if (aiData.businessContext) {
+            setBusinessInfo(aiData.businessContext);
+          }
           setAiReply(reply);
 
           // 3) Day 4: Convert AI reply to speech and play it
@@ -220,6 +240,17 @@ export default function App() {
 
       <h3>AI Reply</h3>
       <p>{aiReply}</p>
+
+      {businessInfo ? (
+        <>
+          <h3>Business Context</h3>
+          <p>
+            <strong>{businessInfo.businessName}</strong> with{" "}
+            {businessInfo.receptionistName}. Hours: {businessInfo.businessHours}.
+          </p>
+          <p>Services: {businessInfo.servicesOffered?.join(", ")}</p>
+        </>
+      ) : null}
     </div>
   );
 }

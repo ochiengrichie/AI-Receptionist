@@ -9,10 +9,12 @@ export async function handleTTS(req, res) {
     }
 
     const result = await generateSpeech(text);
+    const audioPath = `/audio/${result.fileName}`;
 
     return res.status(200).json({
       message: "TTS successful",
-      audioUrl: `http://localhost:3000/audio/${result.fileName}`,
+      audioUrl: `${req.protocol}://${req.get("host")}${audioPath}`,
+      audioPath,
     });
   } catch (error) {
     console.error("TTS error:", error);

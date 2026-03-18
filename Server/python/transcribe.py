@@ -2,6 +2,9 @@ import sys
 import json
 from faster_whisper import WhisperModel
 
+# Load once at module level
+model = WhisperModel("base", compute_type="int8")
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No audio file path provided"}))
@@ -10,18 +13,18 @@ def main():
     audio_path = sys.argv[1]
 
     try:
-        model = WhisperModel("base", compute_type="int8")
-
         segments, info = model.transcribe(audio_path, language="en", task="transcribe")
 
-        transcript_parts = [segment.text.strip() for segment in segments]
-        transcript = " ".join(transcript_parts).strip()
+        # Convert generator to list ONCE so it can be iterated twice
+        segments_list = list(segments)
+
+        transcript = " ".join(s.text.strip() for s in segments_list).strip()
 
         print(json.dumps({
             "transcript": transcript,
             "language": info.language,
             "duration": info.duration,
-            "segments": [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments]
+            "segments": [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments_list]
         }))
     except Exception as e:
         print(json.dumps({"error": str(e)}))

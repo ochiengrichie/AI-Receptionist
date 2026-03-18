@@ -43,13 +43,18 @@ export async function transcribeAudio(filePath) {
       });
     }
 
-    const pythonCandidates = [
+    const pythonCandidates = process.platform === "win32"
+  ? [
       { cmd: "py", args: ["-3.11"] },
       { cmd: "py", args: ["-3.10"] },
       { cmd: "py", args: [] },
       { cmd: "python", args: [] },
+    ]
+  : [
+      { cmd: "python3.11", args: [] },
+      { cmd: "python3", args: [] },
+      { cmd: "python", args: [] },
     ];
-
     let stdout = "";
     let stderr = "";
     let candidateIndex = 0;

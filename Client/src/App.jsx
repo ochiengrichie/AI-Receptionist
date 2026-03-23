@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createRealtimeSocket } from "./realtime/socket.js";
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const DEFAULT_BACKEND_ORIGIN = "http://localhost:3000";
+
 function createSessionId() {
   if (globalThis.crypto?.randomUUID) {
     return globalThis.crypto.randomUUID();
@@ -109,7 +112,7 @@ export default function App() {
 
     const resolvedAudioUrl = audioUrl.startsWith("http")
       ? audioUrl
-      : `${window.location.protocol}//localhost:3000${audioUrl}`;
+      : `${API_BASE_URL || DEFAULT_BACKEND_ORIGIN}${audioUrl}`;
     const audio = new Audio(resolvedAudioUrl);
     audioRef.current = audio;
 

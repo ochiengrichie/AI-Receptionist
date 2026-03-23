@@ -1,30 +1,14 @@
 import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import { fileURLToPath } from "url";
-import path from "path";
+import http from "http";
+import app from "./App.js";
+import { attachRealtimeServer } from "./realtime/socket.server.js";
 
+const httpServer = http.createServer(app);
 
-import transcribeRoute from "./routes/transcribe.route.js";
-import aiRoute from "./routes/ai.route.js";
-import ttsRoute from "./routes/tts.route.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const app = express();
-
-app.use(cors());
-app.use(express.json());
-
-app.use("/transcribe", transcribeRoute);
-app.use("/ai", aiRoute);
-app.use("/tts", ttsRoute);
-
-app.use("/audio", express.static(path.resolve(__dirname, "../outputs")));
+attachRealtimeServer(httpServer);
 
 const PORT = Number(process.env.PORT) || 3000;
 
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

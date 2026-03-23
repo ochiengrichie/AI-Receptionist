@@ -47,6 +47,22 @@ export function createRealtimeSocket({ onOpen, onClose, onError, onMessage } = {
         })
       );
     },
+    sendAudioChunk({ sessionId, data, mimeType = "audio/webm" }) {
+      if (!data) {
+        throw new Error("Audio chunk data is required");
+      }
+
+      this.send("audio:chunk", {
+        sessionId,
+        mimeType,
+        data,
+      });
+    },
+    endAudio({ sessionId }) {
+      this.send("audio:end", {
+        sessionId,
+      });
+    },
     close() {
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close();

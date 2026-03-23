@@ -1,25 +1,27 @@
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { generateReply } from "../services/ai.service.js";
-import { appendToConversation, getConversationHistory, getOrCreateSession } from "../services/conversation.service.js";
-import { validateReceptionistReply } from "../services/reply-validator.service.js";
-import generateSpeech from "../services/tts.service.js";
-import { transcribeAudio } from "../services/transcribe.service.js";
-import { deleteFile } from "../utils/deleteFile.js";
+
 import {
-  appendAudioChunk,
   attachSocketToSession,
-  consumeAudioChunks,
   deleteRealtimeSession,
-  isSessionProcessing,
   removeSocketFromSession,
-  setSessionProcessing,
 } from "./session.store.js";
+
+import { transcribeAudio } from "../services/transcribe.service.js";
+import { generateReply } from "../services/ai.service.js";
+import {
+  appendToConversation,
+  getConversationHistory,
+  getOrCreateSession,
+} from "../services/conversation.service.js";
+import { validateReceptionistReply } from "../services/reply.validator.service.js";
+import generateSpeech from "../services/tts.service.js";
+import { deleteFile } from "../utils/deleteFile.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const realtimeUploadsDir = path.resolve(__dirname, "../../uploads/realtime");
+const uploadsDir = path.resolve(__dirname, "../../uploads");
 
 function sendJson(socket, payload) {
   if (socket.readyState !== socket.OPEN) {
@@ -29,145 +31,105 @@ function sendJson(socket, payload) {
   socket.send(JSON.stringify(payload));
 }
 
-function getFileExtensionFromMimeType(mimeType = "") {
-  if (mimeType.includes("webm")) {
-    return ".webm";
-  }
+function guessExtensionFromMimeType(mimeType = "") {
+  const normalized = mimeType.toLowerCase();
 
-  if (mimeType.includes("wav")) {
-    return ".wav";
-  }
+  if (normalized.includes("webm")) return ".webm";
+  if (normalized.includes("wav")) return ".wav";
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return ".mp3";
+  if (normalized.includes("ogg")) return ".ogg";
+  if (normalized.includes("mp4")) return ".mp4";
 
-  return ".bin";
+  return ".webm";
 }
 
-async function ensureRealtimeUploadsDir() {
-  await fs.mkdir(realtimeUploadsDir, { recursive: true });
+async function ensureUploadsDir() {
+  await fs.mkdir(uploadsDir, { recursive: true });
 }
 
-async function runAssistantTurn({ sessionId, message }) {
+async function writeBufferedAudioToDisk(sessionId, audioState) {
+  if (!audioState.chunks.length) {
+    throw new Error("No audio chunks received");
+  }
+
+  await ensureUploadsDir();
+
+  const ext = guessExtensionFromMimeType(audioState.mimeType);
+  const fileName = `${sessionId}-${Date.now()}${ext}`;
+  const filePath = path.join(uploadsDir, fileName);
+
+  const fileBuffer = Buffer.concat(audioState.chunks);
+  await fs.writeFile(filePath, fileBuffer);
+
+  return filePath;
+}
+
+async function runAIFlow(sessionId, userText) {
   const session = getOrCreateSession(sessionId);
   const history = getConversationHistory(session.id);
+
   const { reply: rawReply, context } = await generateReply({
-    message,
+    message: userText,
     history,
   });
 
-  const validation = validateReceptionistReply({
-    userMessage: message,
+  const validated = validateReceptionistReply({
+    userMessage: userText,
     reply: rawReply,
     context,
   });
 
-  appendToConversation(session.id, "user", message);
-  appendToConversation(session.id, "assistant", validation.reply);
+  appendToConversation(session.id, "user", userText);
+  appendToConversation(session.id, "assistant", validated.reply);
+
+  const ttsResult = await generateSpeech(validated.reply);
 
   return {
     sessionId: session.id,
-    reply: validation.reply,
-    validationIssues: validation.issues,
+    reply: validated.reply,
+    validationIssues: validated.issues,
     businessContext: {
       businessName: context.businessName,
       receptionistName: context.receptionistName,
       businessHours: context.businessHours,
       servicesOffered: context.servicesOffered,
     },
+    audioUrl: `/audio/${ttsResult.fileName}`,
   };
-}
-
-async function processRealtimeAudio({ sessionId, socket }) {
-  if (isSessionProcessing(sessionId)) {
-    sendJson(socket, {
-      type: "error",
-      message: "A realtime audio request is already being processed",
-    });
-    return;
-  }
-
-  setSessionProcessing(sessionId, true);
-  const { chunks, mimeType } = consumeAudioChunks(sessionId);
-
-  if (!chunks.length) {
-    setSessionProcessing(sessionId, false);
-    sendJson(socket, {
-      type: "error",
-      message: "No audio chunks were received for this session",
-    });
-    return;
-  }
-
-  let tempFilePath = "";
-
-  try {
-    await ensureRealtimeUploadsDir();
-
-    // We rebuild the recorded blob on the server so the existing file-based STT service can be reused.
-    tempFilePath = path.join(
-      realtimeUploadsDir,
-      `${sessionId}-${Date.now()}${getFileExtensionFromMimeType(mimeType)}`
-    );
-
-    await fs.writeFile(tempFilePath, Buffer.concat(chunks));
-
-    const transcriptResult = await transcribeAudio(tempFilePath);
-    const transcript = transcriptResult.transcript?.trim();
-
-    if (!transcript) {
-      throw new Error("No transcript returned from STT");
-    }
-
-    sendJson(socket, {
-      type: "transcript:final",
-      sessionId,
-      transcript,
-    });
-
-    const assistantTurn = await runAssistantTurn({
-      sessionId,
-      message: transcript,
-    });
-
-    sendJson(socket, {
-      type: "ai:reply",
-      ...assistantTurn,
-    });
-
-    const speechResult = await generateSpeech(assistantTurn.reply);
-
-    sendJson(socket, {
-      type: "tts:ready",
-      sessionId,
-      audioPath: `/audio/${speechResult.fileName}`,
-      audioUrl: `/audio/${speechResult.fileName}`,
-    });
-  } catch (error) {
-    sendJson(socket, {
-      type: "error",
-      message: error.message || "Realtime audio processing failed",
-    });
-  } finally {
-    setSessionProcessing(sessionId, false);
-    if (tempFilePath) {
-      await deleteFile(tempFilePath);
-    }
-  }
 }
 
 export function handleSocketConnection(socket) {
   let activeSessionId = null;
 
+  const audioState = {
+    mimeType: "audio/webm",
+    chunks: [],
+    startedAt: null,
+  };
+
   socket.on("message", async (rawMessage, isBinary) => {
     if (isBinary) {
       sendJson(socket, {
         type: "error",
-        message: "Binary audio streaming is not wired yet. Send JSON events first.",
+        message:
+          "Binary websocket streaming is not supported yet. Send JSON with base64 audio chunks.",
+      });
+      return;
+    }
+
+    let payload;
+
+    try {
+      payload = JSON.parse(rawMessage.toString());
+    } catch (error) {
+      sendJson(socket, {
+        type: "error",
+        message: `Invalid socket payload: ${error.message}`,
       });
       return;
     }
 
     try {
-      const payload = JSON.parse(rawMessage.toString());
-
       switch (payload.type) {
         case "session:start": {
           activeSessionId = payload.sessionId;
@@ -181,6 +143,7 @@ export function handleSocketConnection(socket) {
           }
 
           attachSocketToSession(activeSessionId, socket);
+          getOrCreateSession(activeSessionId);
 
           sendJson(socket, {
             type: "session:ready",
@@ -209,6 +172,7 @@ export function handleSocketConnection(socket) {
           }
 
           const text = payload.text?.trim();
+
           if (!text) {
             sendJson(socket, {
               type: "error",
@@ -217,31 +181,34 @@ export function handleSocketConnection(socket) {
             return;
           }
 
-          // This mirrors the future realtime flow: transcript first, assistant reply second.
+          sendJson(socket, {
+            type: "processing:start",
+            sessionId: activeSessionId,
+            message: "Generating AI reply...",
+          });
+
+          const aiResult = await runAIFlow(activeSessionId, text);
+
           sendJson(socket, {
             type: "transcript:final",
             sessionId: activeSessionId,
             transcript: text,
           });
 
-          const assistantTurn = await runAssistantTurn({
-            sessionId: activeSessionId,
-            message: text,
-          });
-
           sendJson(socket, {
             type: "ai:reply",
-            ...assistantTurn,
+            sessionId: aiResult.sessionId,
+            reply: aiResult.reply,
+            validationIssues: aiResult.validationIssues,
+            businessContext: aiResult.businessContext,
           });
-
-          const speechResult = await generateSpeech(assistantTurn.reply);
 
           sendJson(socket, {
             type: "tts:ready",
-            sessionId: activeSessionId,
-            audioPath: `/audio/${speechResult.fileName}`,
-            audioUrl: `/audio/${speechResult.fileName}`,
+            sessionId: aiResult.sessionId,
+            audioUrl: aiResult.audioUrl,
           });
+
           break;
         }
 
@@ -262,12 +229,20 @@ export function handleSocketConnection(socket) {
             return;
           }
 
-          // Audio is sent as base64 text to keep the first socket implementation simple.
-          appendAudioChunk(
-            activeSessionId,
-            Buffer.from(payload.data, "base64"),
-            payload.mimeType
-          );
+          const chunkBuffer = Buffer.from(payload.data, "base64");
+
+          if (!chunkBuffer.length) {
+            sendJson(socket, {
+              type: "error",
+              message: "Received empty audio chunk",
+            });
+            return;
+          }
+
+          audioState.mimeType = payload.mimeType || audioState.mimeType;
+          audioState.startedAt = audioState.startedAt || Date.now();
+          audioState.chunks.push(chunkBuffer);
+
           break;
         }
 
@@ -280,16 +255,80 @@ export function handleSocketConnection(socket) {
             return;
           }
 
+          if (!audioState.chunks.length) {
+            sendJson(socket, {
+              type: "error",
+              message: "No audio chunks received before audio:end",
+            });
+            return;
+          }
+
           sendJson(socket, {
             type: "processing:start",
             sessionId: activeSessionId,
-            message: "Running STT, AI, and TTS...",
+            message: "Transcribing audio...",
           });
 
-          await processRealtimeAudio({
-            sessionId: activeSessionId,
-            socket,
-          });
+          let savedAudioPath = null;
+
+          try {
+            savedAudioPath = await writeBufferedAudioToDisk(
+              activeSessionId,
+              audioState
+            );
+
+            const sttResult = await transcribeAudio(savedAudioPath);
+            const transcript = sttResult.transcript?.trim();
+
+            if (!transcript) {
+              sendJson(socket, {
+                type: "error",
+                sessionId: activeSessionId,
+                message: "No speech detected in the recording",
+              });
+              return;
+            }
+
+            sendJson(socket, {
+              type: "transcript:final",
+              sessionId: activeSessionId,
+              transcript,
+              language: sttResult.language,
+              duration: sttResult.duration,
+              segments: sttResult.segments,
+            });
+
+            sendJson(socket, {
+              type: "processing:start",
+              sessionId: activeSessionId,
+              message: "Generating AI reply...",
+            });
+
+            const aiResult = await runAIFlow(activeSessionId, transcript);
+
+            sendJson(socket, {
+              type: "ai:reply",
+              sessionId: aiResult.sessionId,
+              reply: aiResult.reply,
+              validationIssues: aiResult.validationIssues,
+              businessContext: aiResult.businessContext,
+            });
+
+            sendJson(socket, {
+              type: "tts:ready",
+              sessionId: aiResult.sessionId,
+              audioUrl: aiResult.audioUrl,
+            });
+          } finally {
+            audioState.chunks = [];
+            audioState.startedAt = null;
+            audioState.mimeType = "audio/webm";
+
+            if (savedAudioPath) {
+              await deleteFile(savedAudioPath);
+            }
+          }
+
           break;
         }
 
@@ -303,12 +342,17 @@ export function handleSocketConnection(socket) {
     } catch (error) {
       sendJson(socket, {
         type: "error",
-        message: `Invalid socket payload: ${error.message}`,
+        sessionId: activeSessionId,
+        message: error.message || "Realtime processing failed",
       });
     }
   });
 
   socket.on("close", () => {
+    audioState.chunks = [];
+    audioState.startedAt = null;
+    audioState.mimeType = "audio/webm";
+
     if (activeSessionId) {
       removeSocketFromSession(activeSessionId);
       deleteRealtimeSession(activeSessionId);

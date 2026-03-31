@@ -1,6 +1,6 @@
 import { generateReply } from "../services/ai.service.js";
 import { appendToConversation, getConversationHistory, getOrCreateSession,} from "../services/conversation.service.js";
-import { validateReceptionistReply } from "../services/reply-validator.service.js";
+import { validateReceptionistReply } from "../services/reply.validator.service.js";
 
 export async function handleAIReply(req, res) {
   try {

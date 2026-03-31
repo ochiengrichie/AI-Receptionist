@@ -1,20 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-
-import {
-  attachSocketToSession,
-  deleteRealtimeSession,
-  removeSocketFromSession,
-} from "./session.store.js";
-
+import { attachSocketToSession,  deleteRealtimeSession,  removeSocketFromSession,} from "./session.store.js";
 import { transcribeAudio } from "../services/transcribe.service.js";
 import { generateReply } from "../services/ai.service.js";
-import {
-  appendToConversation,
-  getConversationHistory,
-  getOrCreateSession,
-} from "../services/conversation.service.js";
+import { appendToConversation, getConversationHistory, getOrCreateSession } from "../services/conversation.service.js";
 import { validateReceptionistReply } from "../services/reply.validator.service.js";
 import generateSpeech from "../services/tts.service.js";
 import { deleteFile } from "../utils/deleteFile.js";
@@ -358,4 +348,4 @@ export function handleSocketConnection(socket) {
       deleteRealtimeSession(activeSessionId);
     }
   });
-}
+};

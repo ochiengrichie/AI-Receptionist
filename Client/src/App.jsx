@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createRealtimeSocket } from "./realtime/socket.js";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const DEFAULT_BACKEND_ORIGIN = "http://localhost:3000";
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:3000"
+).replace(/\/+$/, "");
+
 
 function createSessionId() {
   if (globalThis.crypto?.randomUUID) {
@@ -17,8 +18,6 @@ export default function App() {
   const streamRef = useRef(null);
   const sessionIdRef = useRef(createSessionId());
   const realtimeClientRef = useRef(null);
-
-  // Holds the currently playing AI audio so we can stop/replace it cleanly
   const audioRef = useRef(null);
 
   const [isRecording, setIsRecording] = useState(false);
@@ -30,49 +29,59 @@ export default function App() {
   const [realtimeDraft, setRealtimeDraft] = useState("");
 
   useEffect(() => {
-    // Keep socket setup in one effect so the connection is created only once per page load.
     const realtimeClient = createRealtimeSocket({
       onOpen: () => {
         setSocketStatus("Connected");
-        setStatus("Realtime channel connected");
+        setStatus("Realtime connected");
 
         realtimeClient.send("session:start", {
           sessionId: sessionIdRef.current,
         });
       },
+
       onClose: () => {
         setSocketStatus("Disconnected");
       },
+
       onError: () => {
         setSocketStatus("Error");
+        setStatus("Socket error");
       },
+
       onMessage: (payload) => {
         switch (payload.type) {
           case "session:ready":
             setStatus(payload.message || "Realtime session ready");
             break;
+
+          case "processing:start":
+            setStatus(payload.message || "Processing...");
+            break;
+
           case "transcript:final":
             setTranscript(payload.transcript || "No transcript returned");
             break;
+
           case "ai:reply":
             setAiReply(payload.reply || "No AI reply returned");
+
             if (payload.businessContext) {
               setBusinessInfo(payload.businessContext);
             }
             break;
+
           case "tts:ready":
             if (payload.audioUrl) {
-              playAudioFromUrl(payload.audioUrl).catch((error) => {
+              playAudio(payload.audioUrl).catch((error) => {
                 setStatus(error.message || "Audio playback failed");
               });
             }
             break;
-          case "processing:start":
-            setStatus(payload.message || "Processing realtime audio");
-            break;
+
           case "error":
             setStatus(payload.message || "Realtime request failed");
             break;
+
           default:
             break;
         }
@@ -87,16 +96,14 @@ export default function App() {
     };
   }, []);
 
-  // Helper: stop microphone stream safely
-  const stopMicrophoneStream = () => {
+  const stopMicrophone = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
   };
 
-  // Helper: stop any AI audio currently playing
-  const stopCurrentAudio = () => {
+  const stopAudio = () => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -104,25 +111,20 @@ export default function App() {
     }
   };
 
-  const playAudioFromUrl = async (audioUrl) => {
-    // Stop previous audio before playing a new one
-    stopCurrentAudio();
-
+  const playAudio = async (url) => {
+    stopAudio();
     setStatus("AI speaking...");
 
-    const resolvedAudioUrl = audioUrl.startsWith("http")
-      ? audioUrl
-      : `${API_BASE_URL || DEFAULT_BACKEND_ORIGIN}${audioUrl}`;
-    const audio = new Audio(resolvedAudioUrl);
+    const fullUrl = url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
+    const audio = new Audio(fullUrl);
     audioRef.current = audio;
 
-    // When playback ends, update status
     audio.onended = () => {
       setStatus("Done");
     };
 
     audio.onerror = () => {
-      setStatus("Audio playback failed");
+      setStatus("Audio failed");
     };
 
     await audio.play();
@@ -134,12 +136,12 @@ export default function App() {
 
       reader.onloadend = () => {
         const result = reader.result;
+
         if (typeof result !== "string") {
-          reject(new Error("Failed to convert audio chunk to base64"));
+          reject(new Error("Base64 conversion failed"));
           return;
         }
 
-        // FileReader returns a data URL, so we only keep the base64 payload after the comma.
         resolve(result.split(",")[1] || "");
       };
 
@@ -152,47 +154,49 @@ export default function App() {
 
   const startRecording = async () => {
     try {
-      // Stop any previous AI voice if user starts a new recording
-      stopCurrentAudio();
+      stopAudio();
 
-      setStatus("Requesting microphone access...");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      if (socketStatus !== "Connected" || !realtimeClientRef.current) {
-        throw new Error("Realtime socket is not connected");
+      if (
+        !realtimeClientRef.current ||
+        realtimeClientRef.current.readyState !== WebSocket.OPEN
+      ) {
+        throw new Error("Socket not connected");
       }
 
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
 
-      // Each chunk is sent over the socket immediately so the backend can build the request incrementally.
-      mediaRecorder.ondataavailable = async (event) => {
+      recorder.ondataavailable = async (event) => {
         if (event.data && event.data.size > 0) {
           try {
-            const base64Data = await blobToBase64(event.data);
+            const base64 = await blobToBase64(event.data);
 
             realtimeClientRef.current.send("audio:chunk", {
               sessionId: sessionIdRef.current,
               mimeType: event.data.type || "audio/webm",
-              data: base64Data,
+              data: base64,
             });
           } catch (error) {
             console.error("Audio chunk error:", error);
-            setStatus(error.message || "Failed to stream audio chunk");
+            setStatus(error.message || "Failed to send audio chunk");
           }
         }
       };
 
-      mediaRecorder.onstart = () => {
+      recorder.onstart = () => {
         setIsRecording(true);
         setStatus("Recording...");
         setTranscript("Listening...");
-        setAiReply("Waiting for AI reply...");
+        setAiReply("Waiting...");
       };
 
-      mediaRecorder.onstop = async () => {
+      recorder.onstop = () => {
         setIsRecording(false);
         setStatus("Processing audio...");
 
@@ -201,60 +205,49 @@ export default function App() {
             sessionId: sessionIdRef.current,
           });
         } catch (error) {
-          console.error("Realtime processing error:", error);
-          setStatus(error.message || "Failed to finalize realtime audio");
+          setStatus(error.message || "Failed to finalize audio");
         } finally {
-          stopMicrophoneStream();
+          stopMicrophone();
         }
       };
 
-      // A short timeslice causes MediaRecorder to fire chunk events while the user is still speaking.
-      mediaRecorder.start(300);
-    } catch (error) {
-      console.error("Microphone error:", error);
-      setStatus(error.message || "Microphone access denied or failed");
-      stopMicrophoneStream();
+      recorder.start(300);
+    } catch (err) {
+      console.error(err);
+      setStatus(err.message || "Mic failed");
+      stopMicrophone();
     }
   };
 
   const stopRecording = () => {
-    const recorder = mediaRecorderRef.current;
+    const rec = mediaRecorderRef.current;
 
-    if (recorder && recorder.state !== "inactive") {
-      recorder.stop();
+    if (rec && rec.state !== "inactive") {
+      rec.stop();
     }
   };
 
   const sendRealtimeMessage = () => {
     const text = realtimeDraft.trim();
-    if (!text) {
-      return;
-    }
+    if (!text) return;
 
     try {
       realtimeClientRef.current?.send("conversation:text", {
         sessionId: sessionIdRef.current,
         text,
       });
-      setStatus("Realtime text sent");
+
       setRealtimeDraft("");
     } catch (error) {
-      setStatus(error.message || "Failed to send realtime message");
+      setStatus(error.message || "Failed to send message");
     }
   };
 
   return (
-    <div
-      style={{
-        maxWidth: "600px",
-        margin: "40px auto",
-        fontFamily: "Arial",
-        lineHeight: "1.6",
-      }}
-    >
+    <div style={{ maxWidth: 600, margin: "40px auto", fontFamily: "Arial" }}>
       <h1>AI Receptionist</h1>
 
-      <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
+      <div style={{ display: "flex", gap: 10 }}>
         <button onClick={startRecording} disabled={isRecording}>
           Start Recording
         </button>
@@ -269,18 +262,20 @@ export default function App() {
       </p>
 
       <p>
-        <strong>Realtime Socket:</strong> {socketStatus}
+        <strong>Socket:</strong> {socketStatus}
       </p>
 
-      <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
+      <div style={{ display: "flex", gap: 10 }}>
         <input
           value={realtimeDraft}
-          onChange={(event) => setRealtimeDraft(event.target.value)}
-          placeholder="Send a realtime test message"
-          style={{ flex: 1, padding: "8px" }}
+          onChange={(e) => setRealtimeDraft(e.target.value)}
+          placeholder="Test message"
         />
-        <button onClick={sendRealtimeMessage} disabled={socketStatus !== "Connected"}>
-          Send Realtime Text
+        <button
+          onClick={sendRealtimeMessage}
+          disabled={socketStatus !== "Connected"}
+        >
+          Send
         </button>
       </div>
 
@@ -290,16 +285,16 @@ export default function App() {
       <h3>AI Reply</h3>
       <p>{aiReply}</p>
 
-      {businessInfo ? (
+      {businessInfo && (
         <>
-          <h3>Business Context</h3>
+          <h3>Business</h3>
           <p>
             <strong>{businessInfo.businessName}</strong> with{" "}
-            {businessInfo.receptionistName}. Hours: {businessInfo.businessHours}.
+            {businessInfo.receptionistName}. Hours: {businessInfo.businessHours}
           </p>
           <p>Services: {businessInfo.servicesOffered?.join(", ")}</p>
         </>
-      ) : null}
+      )}
     </div>
   );
 }

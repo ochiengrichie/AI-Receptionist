@@ -1,30 +1,31 @@
-const WS_BASE = (import.meta.env.VITE_WS_BASE_URL || "").replace(/\/$/, "");
+function buildWebSocketUrl() {
+  const apiBase = import.meta.env.VITE_API_URL || "http://localhost:3000";
+  const normalizedBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
+  const url = new URL(normalizedBase);
 
-function resolveSocketUrl() {
-  if (WS_BASE) {
-    return `${WS_BASE}/realtime`;
-  }
+  // Convert http/https into ws/wss
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/realtime";
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//localhost:3000/realtime`;
+  return url.toString();
 }
 
-export function createRealtimeSocket({ onOpen, onClose, onError, onMessage } = {}) {
-  const socket = new WebSocket(resolveSocketUrl());
+export function createRealtimeSocket({  onOpen,  onClose,  onError,  onMessage,} = {}) {
+  const ws = new WebSocket(buildWebSocketUrl());
 
-  socket.addEventListener("open", () => {
+  ws.addEventListener("open", () => {
     onOpen?.();
   });
 
-  socket.addEventListener("close", (event) => {
+  ws.addEventListener("close", (event) => {
     onClose?.(event);
   });
 
-  socket.addEventListener("error", (event) => {
+  ws.addEventListener("error", (event) => {
     onError?.(event);
   });
 
-  socket.addEventListener("message", (event) => {
+  ws.addEventListener("message", (event) => {
     try {
       const payload = JSON.parse(event.data);
       onMessage?.(payload);
@@ -34,39 +35,34 @@ export function createRealtimeSocket({ onOpen, onClose, onError, onMessage } = {
   });
 
   return {
-    socket,
-    send(type, payload = {}) {
-      if (socket.readyState !== WebSocket.OPEN) {
-        throw new Error("WebSocket is not connected yet");
+    send(type, data = {}) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        throw new Error("Realtime socket is not connected");
       }
 
-      socket.send(
+      ws.send(
         JSON.stringify({
           type,
-          ...payload,
+          ...data,
         })
       );
     },
-    sendAudioChunk({ sessionId, data, mimeType = "audio/webm" }) {
-      if (!data) {
-        throw new Error("Audio chunk data is required");
-      }
 
-      this.send("audio:chunk", {
-        sessionId,
-        mimeType,
-        data,
-      });
-    },
-    endAudio({ sessionId }) {
-      this.send("audio:end", {
-        sessionId,
-      });
-    },
     close() {
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-        socket.close();
+      if (
+        ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING
+      ) {
+        ws.close();
       }
+    },
+
+    get readyState() {
+      return ws.readyState;
+    },
+
+    get rawSocket() {
+      return ws;
     },
   };
 }

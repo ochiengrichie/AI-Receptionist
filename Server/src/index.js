@@ -1,14 +1,13 @@
 import "dotenv/config";
 import http from "http";
-import app from "./App.js";
+import app from "./app.js";
 import { attachRealtimeServer } from "./realtime/socket.server.js";
+import { env } from "./config/env.config.js";
 
-const httpServer = http.createServer(app);
+const server = http.createServer(app);
 
-attachRealtimeServer(httpServer);
+attachRealtimeServer(server);
 
-const PORT = Number(process.env.PORT) || 3000;
-
-httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(env.PORT, () => {
+  console.log(`Server running on port ${env.PORT}`);
 });

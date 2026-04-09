@@ -1,113 +1,56 @@
-import { spawn } from "child_process";
+import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import fs from "fs";
+import axios from "axios";
+import { env } from "../config/env.config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const outputsDir = path.resolve(__dirname, "../../outputs");
 
-export function generateSpeech(text) {
-  return new Promise((resolve, reject) => {
-    const scriptPath = path.resolve(__dirname, "../../python/tts.py");
-    const fileName = `tts-${Date.now()}.mp3`;
-    const outputPath = path.resolve(__dirname, "../../outputs", fileName);
+async function ensureOutputsDir() {
+  await fs.mkdir(outputsDir, { recursive: true });
+}
 
-    if (!fs.existsSync(path.resolve(__dirname, "../../outputs"))) {
-      fs.mkdirSync(path.resolve(__dirname, "../../outputs"), { recursive: true });
+export async function generateSpeech(text) {
+  const trimmedText = text?.trim();
+
+  if (!trimmedText) {
+    throw new Error("Text is required for TTS generation");
+  }
+
+  if (!env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is missing");
+  }
+
+  await ensureOutputsDir();
+
+  const fileName = `tts-${Date.now()}.mp3`;
+  const outputPath = path.join(outputsDir, fileName);
+
+  const response = await axios.post(
+    "https://api.openai.com/v1/audio/speech",
+    {
+      model: env.OPENAI_TTS_MODEL,
+      voice: env.OPENAI_TTS_VOICE,
+      input: trimmedText,
+      format: "mp3",
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      responseType: "arraybuffer",
     }
+  );
 
-    const pythonCandidateCommands = process.platform === "win32"
-      ? [
-          {cmd: "py", args: ["-3.11"]},
-          {cmd: "py", args: ["-3.10"]},
-          {cmd: "py", args: []},
-          {cmd: "python", args: []},
-        ]
-      : [
-          {cmd: "python3.11", args: []},
-          {cmd: "python3", args: []},
-          {cmd: "python", args: []},
-        ];
+  await fs.writeFile(outputPath, Buffer.from(response.data));
 
-    let pythonProcess;
-    let currentCandidate = 0;
-
-    function startPythonProcess() {
-      const candidate = pythonCandidateCommands[currentCandidate];
-      if (!candidate) {
-        return reject(new Error("No usable Python binary found. Install Python >=3.7 and TTS dependencies."));
-      }
-
-      pythonProcess = spawn(candidate.cmd, [...candidate.args, scriptPath, text, outputPath]);
-
-      pythonProcess.on("error", (err) => {
-        if (err.code === "ENOENT" || err.code === "EPERM") {
-          currentCandidate += 1;
-          return startPythonProcess();
-        }
-
-        reject(err);
-      });
-
-      pythonProcess.stdout.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      pythonProcess.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      pythonProcess.on("close", handleClose);
-    }
-
-    function handleClose(code) {
-      if (code !== 0) {
-        const errMessage = stderr || stdout || "TTS process failed with non-zero exit code";
-        return reject(new Error(errMessage));
-      }
-
-      try {
-        const lines = stdout
-          .trim()
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean);
-
-        const parsed = lines.reduce((acc, line) => {
-          try {
-            const item = JSON.parse(line);
-            return item;
-          } catch {
-            return acc;
-          }
-        }, null);
-
-        if (!parsed) {
-          throw new Error("No valid JSON output from TTS script");
-        }
-
-        if (parsed.error) {
-          return reject(new Error(parsed.error));
-        }
-
-        if (!parsed.success || !parsed.file) {
-          return reject(new Error("TTS script did not return success/file information"));
-        }
-
-        resolve({
-          fileName,
-          outputPath,
-        });
-      } catch (error) {
-        reject(new Error(`Failed to parse TTS response: ${error.message}. stdout=${stdout} stderr=${stderr}`));
-      }
-    }
-
-    let stdout = "";
-    let stderr = "";
-
-    startPythonProcess();
-  });
+  return {
+    fileName,
+    outputPath,
+  };
 }
 
 export default generateSpeech;

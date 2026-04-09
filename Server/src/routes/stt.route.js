@@ -2,7 +2,7 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { handleTranscription } from "../controllers/transcribe.controller.js";
+import { handleTranscription } from "../controllers/stt.controller.js";
 
 const router = express.Router();
 
@@ -25,5 +25,5 @@ const upload = multer({ storage });
 
 router.post("/", upload.single("audio"), handleTranscription);
 
-export const transcribeRoute = router;
+export const sttRoute = router;
 export default router;

@@ -2,7 +2,7 @@ import axios from "axios";
 import fs from "fs";
 import FormData from "form-data";
 import path from "path";
-import { env } from "../../config/env.config.js";
+import { env } from "../config/env.config.js";
 
 export async function transcribeAudio(filePath) {
   if (!filePath) {

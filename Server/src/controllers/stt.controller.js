@@ -1,4 +1,4 @@
-import { transcribeAudio} from "../services/transcribe.service.js";
+import { transcribeAudio } from "../services/stt.service.js";
 import { deleteFile } from "../utils/deleteFile.js";
 
 export async function handleTranscription(req, res) {

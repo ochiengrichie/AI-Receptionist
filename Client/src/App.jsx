@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createRealtimeSocket } from "./realtime/socket.js";
+import "./App.css";
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:3000"
-).replace(/\/+$/, "");
-
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:3000").replace(/\/+$/, "");
 
 function createSessionId() {
   if (globalThis.crypto?.randomUUID) {
@@ -243,58 +242,131 @@ export default function App() {
     }
   };
 
+  const isConnected = socketStatus === "Connected";
+  const showWaveform =
+    isRecording || status.includes("Processing") || status.includes("speaking");
+
   return (
-    <div style={{ maxWidth: 600, margin: "40px auto", fontFamily: "Arial" }}>
-      <h1>AI Receptionist</h1>
+    <main className="app-shell">
+      <section className="page">
+        <header className="topbar">
+          <div className="brand">
+            <button className="menu-button" type="button" aria-label="Menu">
+              <span />
+              <span />
+              <span />
+            </button>
+            <div>
+              <h1>AI Receptionist Demo</h1>
+              <p className="subtitle">{status}</p>
+            </div>
+          </div>
 
-      <div style={{ display: "flex", gap: 10 }}>
-        <button onClick={startRecording} disabled={isRecording}>
-          Start Recording
-        </button>
+          <div className={`connection-pill ${isConnected ? "online" : "offline"}`}>
+            <span className="status-dot" aria-hidden="true" />
+            <span>{socketStatus}</span>
+          </div>
+        </header>
 
-        <button onClick={stopRecording} disabled={!isRecording}>
-          Stop Recording
-        </button>
-      </div>
+        <section className="panel-grid">
+          <article className="panel-card">
+            <div className="panel-card-header">
+              <h2>User Transcript</h2>
+            </div>
+            <div className="panel-card-body">
+              <div className="transcript-bubble">{transcript}</div>
+            </div>
+          </article>
 
-      <p>
-        <strong>Status:</strong> {status}
-      </p>
+          <article className="panel-card">
+            <div className="panel-card-header">
+              <h2>AI Receptionist Reply</h2>
+            </div>
+            <div className="panel-card-body ai-panel-body">
+              <div className="reply-bubble">{aiReply}</div>
+              <div className={`waveform ${showWaveform ? "active" : ""}`} aria-hidden="true">
+                {Array.from({ length: 25 }).map((_, index) => (
+                  <span
+                    key={index}
+                    style={{ animationDelay: `${index * 0.06}s` }}
+                  />
+                ))}
+              </div>
+            </div>
+          </article>
+        </section>
 
-      <p>
-        <strong>Socket:</strong> {socketStatus}
-      </p>
+        <section className="history-card">
+          <div className="panel-card-header">
+            <h2>Conversation History</h2>
+          </div>
+          <div className="history-body">
+            <div className="history-row">
+              <span className="history-label">You:</span>
+              <p>{transcript}</p>
+            </div>
+            <div className="history-row">
+              <span className="history-label">AI:</span>
+              <p>{aiReply}</p>
+            </div>
+            {businessInfo && (
+              <div className="business-strip">
+                <strong>{businessInfo.businessName}</strong>
+                <span>{businessInfo.receptionistName}</span>
+                <span>{businessInfo.businessHours}</span>
+                <span>{businessInfo.servicesOffered?.join(", ")}</span>
+              </div>
+            )}
+          </div>
+        </section>
 
-      <div style={{ display: "flex", gap: 10 }}>
-        <input
-          value={realtimeDraft}
-          onChange={(e) => setRealtimeDraft(e.target.value)}
-          placeholder="Test message"
-        />
-        <button
-          onClick={sendRealtimeMessage}
-          disabled={socketStatus !== "Connected"}
-        >
-          Send
-        </button>
-      </div>
+        <section className="controls-card">
+          <div className="panel-card-header">
+            <h2>Recording Controls</h2>
+          </div>
+          <div className="controls-body">
+            <div className="control-group">
+              <button
+                className="record-button"
+                type="button"
+                onClick={startRecording}
+                disabled={isRecording}
+              >
+                <span className="record-icon" aria-hidden="true" />
+                <span>Start Recording</span>
+              </button>
 
-      <h3>Transcript</h3>
-      <p>{transcript}</p>
+              <button
+                className="stop-button"
+                type="button"
+                onClick={stopRecording}
+                disabled={!isRecording}
+              >
+                Stop Recording
+              </button>
+            </div>
 
-      <h3>AI Reply</h3>
-      <p>{aiReply}</p>
-
-      {businessInfo && (
-        <>
-          <h3>Business</h3>
-          <p>
-            <strong>{businessInfo.businessName}</strong> with{" "}
-            {businessInfo.receptionistName}. Hours: {businessInfo.businessHours}
-          </p>
-          <p>Services: {businessInfo.servicesOffered?.join(", ")}</p>
-        </>
-      )}
-    </div>
+            <div className="text-control">
+              <label className="text-input-wrap">
+                <span className="text-input-label">Message</span>
+                <input
+                  value={realtimeDraft}
+                  onChange={(e) => setRealtimeDraft(e.target.value)}
+                  placeholder="Type a test message"
+                />
+              </label>
+              <button
+                className="send-button"
+                type="button"
+                onClick={sendRealtimeMessage}
+                disabled={!isConnected}
+              >
+                Send Text
+              </button>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
   );
 }

@@ -4,7 +4,7 @@ import cors from "cors";
 import { fileURLToPath } from "url";
 import path from "path";
 
-import transcribeRoute from "./routes/transcribe.route.js";
+import sttRoute from "./routes/stt.route.js";
 import aiRoute from "./routes/ai.route.js";
 import ttsRoute from "./routes/tts.route.js";
 
@@ -22,7 +22,7 @@ app.use(
 
 app.use(express.json());
 
-app.use("/transcribe", transcribeRoute);
+app.use("/transcribe", sttRoute);
 app.use("/ai", aiRoute);
 app.use("/tts", ttsRoute);
 

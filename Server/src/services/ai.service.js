@@ -1,5 +1,6 @@
 import axios from "axios";
 import { getBusinessContext } from "../config/business.config.js";
+import { env } from "../config/env.config.js";
 
 function buildSystemPrompt(context) {
   return `
@@ -27,29 +28,58 @@ Your goal is to make the caller feel like they are speaking to a competent human
 `.trim();
 }
 
+function normalizeHistory(history = []) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+
+  return history
+    .filter((item) => item?.role && item?.content)
+    .map((item) => ({
+      role: item.role,
+      content: String(item.content).trim(),
+    }))
+    .filter((item) => item.content.length > 0);
+}
+
 export async function generateReply({ message, history = [] }) {
-  const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
-  const ollamaModel = process.env.OLLAMA_MODEL || "llama3.2:1b";
+  if (!message?.trim()) {
+    throw new Error("message is required for generateReply");
+  }
+
   const context = getBusinessContext();
+  const normalizedHistory = normalizeHistory(history);
 
-  const response = await axios.post(ollamaUrl, {
-    model: ollamaModel,
-    messages: [
-      {
-        role: "system",
-        content: buildSystemPrompt(context),
+  const response = await axios.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      model: env.OPENROUTER_MODEL || "mistralai/mistral-7b-instruct",
+      messages: [
+        {
+          role: "system",
+          content: buildSystemPrompt(context),
+        },
+        ...normalizedHistory,
+        {
+          role: "user",
+          content: message.trim(),
+        },
+      ],
+      temperature: 0.5,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
       },
-      ...history,
-      {
-        role: "user",
-        content: message,
-      },
-    ],
-    stream: false,
-  });
+    }
+  );
 
-  return {
-    reply: response.data.message.content.trim(),
-    context,
-  };
+  const reply = response.data?.choices?.[0]?.message?.content?.trim();
+
+  if (!reply) {
+    throw new Error("LLM returned an empty reply");
+  }
+
+  return { reply, context };
 }

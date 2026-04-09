@@ -1,17 +1,29 @@
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { attachSocketToSession,  deleteRealtimeSession,  removeSocketFromSession,} from "./session.store.js";
-import { transcribeAudio } from "../services/transcribe.service.js";
+
+import {
+  attachSocketToSession,
+  deleteRealtimeSession,
+  removeSocketFromSession,
+} from "./session.store.js";
+
+import { transcribeAudio } from "../services/stt.service.js";
 import { generateReply } from "../services/ai.service.js";
-import { appendToConversation, getConversationHistory, getOrCreateSession } from "../services/conversation.service.js";
+import {
+  appendToConversation,
+  getConversationHistory,
+  getOrCreateSession,
+} from "../services/conversation.service.js";
 import { validateReceptionistReply } from "../services/reply.validator.service.js";
-import generateSpeech from "../services/tts.service.js";
+import { generateSpeech } from "../services/tts.service.js";
 import { deleteFile } from "../utils/deleteFile.js";
+import { EVENTS } from "../constants/events.constants.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const uploadsDir = path.resolve(__dirname, "../../uploads");
+const DEFAULT_AUDIO_MIME_TYPE = "audio/webm";
 
 function sendJson(socket, payload) {
   if (socket.readyState !== socket.OPEN) {
@@ -19,6 +31,14 @@ function sendJson(socket, payload) {
   }
 
   socket.send(JSON.stringify(payload));
+}
+
+function sendError(socket, message, sessionId = null) {
+  sendJson(socket, {
+    type: EVENTS.ERROR,
+    sessionId,
+    message,
+  });
 }
 
 function guessExtensionFromMimeType(mimeType = "") {
@@ -52,6 +72,12 @@ async function writeBufferedAudioToDisk(sessionId, audioState) {
   await fs.writeFile(filePath, fileBuffer);
 
   return filePath;
+}
+
+function resetAudioState(audioState) {
+  audioState.mimeType = DEFAULT_AUDIO_MIME_TYPE;
+  audioState.chunks = [];
+  audioState.startedAt = null;
 }
 
 async function runAIFlow(sessionId, userText) {
@@ -88,264 +114,246 @@ async function runAIFlow(sessionId, userText) {
   };
 }
 
-export function handleSocketConnection(socket) {
-  let activeSessionId = null;
+async function handleSessionStart(socket, payload, state) {
+  state.activeSessionId = payload.sessionId;
 
-  const audioState = {
-    mimeType: "audio/webm",
-    chunks: [],
-    startedAt: null,
+  if (!state.activeSessionId) {
+    sendError(socket, "sessionId is required for session:start");
+    return;
+  }
+
+  attachSocketToSession(state.activeSessionId, socket);
+  getOrCreateSession(state.activeSessionId);
+
+  sendJson(socket, {
+    type: EVENTS.SESSION_READY,
+    sessionId: state.activeSessionId,
+    message: "Realtime session connected",
+  });
+}
+
+function handlePing(socket, state) {
+  sendJson(socket, {
+    type: "pong",
+    sessionId: state.activeSessionId,
+    timestamp: Date.now(),
+  });
+}
+
+async function handleConversationText(socket, payload, state) {
+  if (!state.activeSessionId) {
+    sendError(socket, "Start a session before sending conversation:text");
+    return;
+  }
+
+  const text = payload.text?.trim();
+
+  if (!text) {
+    sendError(socket, "text is required for conversation:text", state.activeSessionId);
+    return;
+  }
+
+  sendJson(socket, {
+    type: EVENTS.PROCESSING_START,
+    sessionId: state.activeSessionId,
+    message: "Generating AI reply...",
+  });
+
+  const aiResult = await runAIFlow(state.activeSessionId, text);
+
+  sendJson(socket, {
+    type: EVENTS.TRANSCRIPT_FINAL,
+    sessionId: state.activeSessionId,
+    transcript: text,
+  });
+
+  sendJson(socket, {
+    type: EVENTS.AI_REPLY,
+    sessionId: aiResult.sessionId,
+    reply: aiResult.reply,
+    validationIssues: aiResult.validationIssues,
+    businessContext: aiResult.businessContext,
+  });
+
+  sendJson(socket, {
+    type: EVENTS.TTS_READY,
+    sessionId: aiResult.sessionId,
+    audioUrl: aiResult.audioUrl,
+  });
+}
+
+function handleAudioChunk(socket, payload, state) {
+  if (!state.activeSessionId) {
+    sendError(socket, "Start a session before sending audio:chunk");
+    return;
+  }
+
+  if (!payload.data) {
+    sendError(socket, "data is required for audio:chunk", state.activeSessionId);
+    return;
+  }
+
+  const chunkBuffer = Buffer.from(payload.data, "base64");
+
+  if (!chunkBuffer.length) {
+    sendError(socket, "Received empty audio chunk", state.activeSessionId);
+    return;
+  }
+
+  state.audio.mimeType = payload.mimeType || state.audio.mimeType;
+  state.audio.startedAt = state.audio.startedAt || Date.now();
+  state.audio.chunks.push(chunkBuffer);
+}
+
+async function handleAudioEnd(socket, state) {
+  if (!state.activeSessionId) {
+    sendError(socket, "Start a session before sending audio:end");
+    return;
+  }
+
+  if (!state.audio.chunks.length) {
+    sendError(socket, "No audio chunks received before audio:end", state.activeSessionId);
+    return;
+  }
+
+  sendJson(socket, {
+    type: EVENTS.PROCESSING_START,
+    sessionId: state.activeSessionId,
+    message: "Transcribing audio...",
+  });
+
+  let savedAudioPath = null;
+
+  try {
+    savedAudioPath = await writeBufferedAudioToDisk(
+      state.activeSessionId,
+      state.audio
+    );
+
+    const sttResult = await transcribeAudio(savedAudioPath);
+    const transcript = sttResult.transcript?.trim();
+
+    if (!transcript) {
+      sendError(socket, "No speech detected in the recording", state.activeSessionId);
+      return;
+    }
+
+    sendJson(socket, {
+      type: EVENTS.TRANSCRIPT_FINAL,
+      sessionId: state.activeSessionId,
+      transcript,
+      language: sttResult.language,
+      duration: sttResult.duration,
+      segments: sttResult.segments,
+    });
+
+    sendJson(socket, {
+      type: EVENTS.PROCESSING_START,
+      sessionId: state.activeSessionId,
+      message: "Generating AI reply...",
+    });
+
+    const aiResult = await runAIFlow(state.activeSessionId, transcript);
+
+    sendJson(socket, {
+      type: EVENTS.AI_REPLY,
+      sessionId: aiResult.sessionId,
+      reply: aiResult.reply,
+      validationIssues: aiResult.validationIssues,
+      businessContext: aiResult.businessContext,
+    });
+
+    sendJson(socket, {
+      type: EVENTS.TTS_READY,
+      sessionId: aiResult.sessionId,
+      audioUrl: aiResult.audioUrl,
+    });
+  } finally {
+    resetAudioState(state.audio);
+
+    if (savedAudioPath) {
+      await deleteFile(savedAudioPath);
+    }
+  }
+}
+
+async function handleMessage(socket, rawMessage, isBinary, state) {
+  if (isBinary) {
+    sendError(
+      socket,
+      "Binary websocket streaming is not supported yet. Send JSON with base64 audio chunks.",
+      state.activeSessionId
+    );
+    return;
+  }
+
+  let payload;
+
+  try {
+    payload = JSON.parse(rawMessage.toString());
+  } catch (error) {
+    sendError(socket, `Invalid socket payload: ${error.message}`, state.activeSessionId);
+    return;
+  }
+
+  switch (payload.type) {
+    case EVENTS.SESSION_START:
+      await handleSessionStart(socket, payload, state);
+      break;
+
+    case "ping":
+      handlePing(socket, state);
+      break;
+
+    case "conversation:text":
+      await handleConversationText(socket, payload, state);
+      break;
+
+    case EVENTS.AUDIO_CHUNK:
+      handleAudioChunk(socket, payload, state);
+      break;
+
+    case EVENTS.AUDIO_END:
+      await handleAudioEnd(socket, state);
+      break;
+
+    default:
+      sendError(
+        socket,
+        `Unsupported message type: ${payload.type || "unknown"}`,
+        state.activeSessionId
+      );
+  }
+}
+
+export function handleSocketConnection(socket) {
+  const state = {
+    activeSessionId: null,
+    audio: {
+      mimeType: DEFAULT_AUDIO_MIME_TYPE,
+      chunks: [],
+      startedAt: null,
+    },
   };
 
   socket.on("message", async (rawMessage, isBinary) => {
-    if (isBinary) {
-      sendJson(socket, {
-        type: "error",
-        message:
-          "Binary websocket streaming is not supported yet. Send JSON with base64 audio chunks.",
-      });
-      return;
-    }
-
-    let payload;
-
     try {
-      payload = JSON.parse(rawMessage.toString());
+      await handleMessage(socket, rawMessage, isBinary, state);
     } catch (error) {
-      sendJson(socket, {
-        type: "error",
-        message: `Invalid socket payload: ${error.message}`,
-      });
-      return;
-    }
-
-    try {
-      switch (payload.type) {
-        case "session:start": {
-          activeSessionId = payload.sessionId;
-
-          if (!activeSessionId) {
-            sendJson(socket, {
-              type: "error",
-              message: "sessionId is required for session:start",
-            });
-            return;
-          }
-
-          attachSocketToSession(activeSessionId, socket);
-          getOrCreateSession(activeSessionId);
-
-          sendJson(socket, {
-            type: "session:ready",
-            sessionId: activeSessionId,
-            message: "Realtime session connected",
-          });
-          break;
-        }
-
-        case "ping": {
-          sendJson(socket, {
-            type: "pong",
-            sessionId: activeSessionId,
-            timestamp: Date.now(),
-          });
-          break;
-        }
-
-        case "conversation:text": {
-          if (!activeSessionId) {
-            sendJson(socket, {
-              type: "error",
-              message: "Start a session before sending conversation:text",
-            });
-            return;
-          }
-
-          const text = payload.text?.trim();
-
-          if (!text) {
-            sendJson(socket, {
-              type: "error",
-              message: "text is required for conversation:text",
-            });
-            return;
-          }
-
-          sendJson(socket, {
-            type: "processing:start",
-            sessionId: activeSessionId,
-            message: "Generating AI reply...",
-          });
-
-          const aiResult = await runAIFlow(activeSessionId, text);
-
-          sendJson(socket, {
-            type: "transcript:final",
-            sessionId: activeSessionId,
-            transcript: text,
-          });
-
-          sendJson(socket, {
-            type: "ai:reply",
-            sessionId: aiResult.sessionId,
-            reply: aiResult.reply,
-            validationIssues: aiResult.validationIssues,
-            businessContext: aiResult.businessContext,
-          });
-
-          sendJson(socket, {
-            type: "tts:ready",
-            sessionId: aiResult.sessionId,
-            audioUrl: aiResult.audioUrl,
-          });
-
-          break;
-        }
-
-        case "audio:chunk": {
-          if (!activeSessionId) {
-            sendJson(socket, {
-              type: "error",
-              message: "Start a session before sending audio:chunk",
-            });
-            return;
-          }
-
-          if (!payload.data) {
-            sendJson(socket, {
-              type: "error",
-              message: "data is required for audio:chunk",
-            });
-            return;
-          }
-
-          const chunkBuffer = Buffer.from(payload.data, "base64");
-
-          if (!chunkBuffer.length) {
-            sendJson(socket, {
-              type: "error",
-              message: "Received empty audio chunk",
-            });
-            return;
-          }
-
-          audioState.mimeType = payload.mimeType || audioState.mimeType;
-          audioState.startedAt = audioState.startedAt || Date.now();
-          audioState.chunks.push(chunkBuffer);
-
-          break;
-        }
-
-        case "audio:end": {
-          if (!activeSessionId) {
-            sendJson(socket, {
-              type: "error",
-              message: "Start a session before sending audio:end",
-            });
-            return;
-          }
-
-          if (!audioState.chunks.length) {
-            sendJson(socket, {
-              type: "error",
-              message: "No audio chunks received before audio:end",
-            });
-            return;
-          }
-
-          sendJson(socket, {
-            type: "processing:start",
-            sessionId: activeSessionId,
-            message: "Transcribing audio...",
-          });
-
-          let savedAudioPath = null;
-
-          try {
-            savedAudioPath = await writeBufferedAudioToDisk(
-              activeSessionId,
-              audioState
-            );
-
-            const sttResult = await transcribeAudio(savedAudioPath);
-            const transcript = sttResult.transcript?.trim();
-
-            if (!transcript) {
-              sendJson(socket, {
-                type: "error",
-                sessionId: activeSessionId,
-                message: "No speech detected in the recording",
-              });
-              return;
-            }
-
-            sendJson(socket, {
-              type: "transcript:final",
-              sessionId: activeSessionId,
-              transcript,
-              language: sttResult.language,
-              duration: sttResult.duration,
-              segments: sttResult.segments,
-            });
-
-            sendJson(socket, {
-              type: "processing:start",
-              sessionId: activeSessionId,
-              message: "Generating AI reply...",
-            });
-
-            const aiResult = await runAIFlow(activeSessionId, transcript);
-
-            sendJson(socket, {
-              type: "ai:reply",
-              sessionId: aiResult.sessionId,
-              reply: aiResult.reply,
-              validationIssues: aiResult.validationIssues,
-              businessContext: aiResult.businessContext,
-            });
-
-            sendJson(socket, {
-              type: "tts:ready",
-              sessionId: aiResult.sessionId,
-              audioUrl: aiResult.audioUrl,
-            });
-          } finally {
-            audioState.chunks = [];
-            audioState.startedAt = null;
-            audioState.mimeType = "audio/webm";
-
-            if (savedAudioPath) {
-              await deleteFile(savedAudioPath);
-            }
-          }
-
-          break;
-        }
-
-        default: {
-          sendJson(socket, {
-            type: "error",
-            message: `Unsupported message type: ${payload.type || "unknown"}`,
-          });
-        }
-      }
-    } catch (error) {
-      sendJson(socket, {
-        type: "error",
-        sessionId: activeSessionId,
-        message: error.message || "Realtime processing failed",
-      });
+      sendError(
+        socket,
+        error.message || "Realtime processing failed",
+        state.activeSessionId
+      );
     }
   });
 
   socket.on("close", () => {
-    audioState.chunks = [];
-    audioState.startedAt = null;
-    audioState.mimeType = "audio/webm";
+    resetAudioState(state.audio);
 
-    if (activeSessionId) {
-      removeSocketFromSession(activeSessionId);
-      deleteRealtimeSession(activeSessionId);
+    if (state.activeSessionId) {
+      removeSocketFromSession(state.activeSessionId);
+      deleteRealtimeSession(state.activeSessionId);
     }
   });
-};
+}

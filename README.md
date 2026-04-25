@@ -2,7 +2,7 @@
 
 A sophisticated AI-powered voice receptionist system that provides intelligent, conversational responses for business communications. This full-stack application combines speech-to-text, natural language processing, and text-to-speech technologies to create a seamless voice interaction experience.
 
-## 🚀 Features
+##  Features
 
 ### Core Functionality
 - **Real-time Voice Conversations**: WebSocket-based bidirectional voice communication
@@ -24,7 +24,7 @@ A sophisticated AI-powered voice receptionist system that provides intelligent, 
 - **Health Monitoring**: Built-in health check endpoints
 - **CORS Support**: Configurable cross-origin resource sharing
 
-## 🛠 Tech Stack
+## Tech Stack
 
 ### Backend
 - **Runtime**: Node.js with ES modules
@@ -47,7 +47,7 @@ A sophisticated AI-powered voice receptionist system that provides intelligent, 
 - **AI Models**: Ollama (local), OpenAI GPT, OpenRouter, Grok
 - **Text-to-Speech**: ElevenLabs
 
-## 📋 Prerequisites
+##  Prerequisites
 
 Before running this application, ensure you have the following installed:
 
@@ -60,7 +60,7 @@ Before running this application, ensure you have the following installed:
 - **Ollama** (for local AI models)
 - **Vosk model** (for offline speech recognition)
 
-## 🔧 Installation
+##  Installation
 
 1. **Clone the repository**
    ```bash
@@ -87,7 +87,7 @@ Before running this application, ensure you have the following installed:
    cd ..
    ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -154,7 +154,7 @@ COMPANY_RULES=Do not promise unavailable times, do not invent pricing or policie
 
 The Vosk model is already included in `Server/models/vosk-model-small-en-us-0.15/`.
 
-## 🚀 Running the Application
+##  Running the Application
 
 ### Development Mode
 
@@ -188,7 +188,7 @@ The Vosk model is already included in `Server/models/vosk-model-small-en-us-0.15
    npm start
    ```
 
-## 📡 API Endpoints
+##  API Endpoints
 
 ### Health Check
 - `GET /health` - Server health status
@@ -206,7 +206,7 @@ The Vosk model is already included in `Server/models/vosk-model-small-en-us-0.15
 ### Real-time WebSocket
 - `ws://localhost:3000` - WebSocket connection for real-time voice conversations
 
-## 💾 Database Schema
+##  Database Schema
 
 ### Tables
 
@@ -222,7 +222,7 @@ The Vosk model is already included in `Server/models/vosk-model-small-en-us-0.15
 - Stores caller information collected during conversations
 - Fields: id, conversation_id, caller_name, phone_number, requested_service, etc.
 
-## 🎯 Usage
+##  Usage
 
 ### Basic Voice Interaction
 
@@ -258,7 +258,7 @@ curl -X POST http://localhost:3000/api/tts/generate \
   -d '{"text": "Hello! How can I help you today?"}'
 ```
 
-## 🔧 Development
+##  Development
 
 ### Project Structure
 
@@ -310,7 +310,7 @@ cd Server
 npm test
 ```
 
-## 🤝 Contributing
+##  Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -325,11 +325,11 @@ npm test
 - Handle errors appropriately
 - Write clean, readable code
 
-## 📄 License
+##  License
 
 This project is licensed under the ISC License - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - **OpenAI** for Whisper STT and GPT models
 - **ElevenLabs** for high-quality TTS
@@ -337,7 +337,7 @@ This project is licensed under the ISC License - see the LICENSE file for detail
 - **Vosk** for offline speech recognition
 - **React & Vite** for the frontend framework
 
-## 📞 Support
+##  Support
 
 For support, please open an issue in the GitHub repository or contact the development team.
 

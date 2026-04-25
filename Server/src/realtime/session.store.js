@@ -1,44 +1,57 @@
 const sessions = new Map();
 
-//This is a helper function to create a new session object with the given sessionId.
 function buildSession(sessionId) {
   return {
-    sessionId,
+    id: sessionId,
     socket: null,
     connectedAt: Date.now(),
     updatedAt: Date.now(),
   };
 }
 
-// This function retrieves an existing session by sessionId or creates a new one if it doesn't exist.
+function updateSession(session) {
+  session.updatedAt = Date.now();
+  return session;
+}
+
 export function getOrCreateRealtimeSession(sessionId) {
   if (!sessions.has(sessionId)) {
     sessions.set(sessionId, buildSession(sessionId));
   }
 
-  const session = sessions.get(sessionId);
-  session.updatedAt = Date.now();
-  return session;
+  return updateSession(sessions.get(sessionId));
 }
 
-// This function attaches a WebSocket connection (socket) to a session identified by sessionId.
 export function attachSocketToSession(sessionId, socket) {
   const session = getOrCreateRealtimeSession(sessionId);
+
   session.socket = socket;
-  session.updatedAt = Date.now();
-  return session;
+
+  return updateSession(session);
 }
 
 export function removeSocketFromSession(sessionId) {
   const session = sessions.get(sessionId);
-  if (!session) {
-    return;
-  }
+  if (!session) return;
 
   session.socket = null;
-  session.updatedAt = Date.now();
+  updateSession(session);
 }
 
 export function deleteRealtimeSession(sessionId) {
   sessions.delete(sessionId);
+}
+
+/* -------------------- OPTIONAL HELPERS (useful later) -------------------- */
+
+export function getSession(sessionId) {
+  return sessions.get(sessionId) || null;
+}
+
+export function getAllSessions() {
+  return Array.from(sessions.values());
+}
+
+export function hasSession(sessionId) {
+  return sessions.has(sessionId);
 }

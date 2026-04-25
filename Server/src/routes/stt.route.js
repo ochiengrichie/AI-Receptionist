@@ -25,5 +25,5 @@ const upload = multer({ storage });
 
 router.post("/", upload.single("audio"), handleTranscription);
 
-export const sttRoute = router;
+export const transcribeRoute = router;
 export default router;

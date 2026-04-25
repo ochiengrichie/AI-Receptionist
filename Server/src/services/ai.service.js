@@ -42,6 +42,29 @@ function normalizeHistory(history = []) {
     .filter((item) => item.content.length > 0);
 }
 
+function formatProviderError(error, providerName) {
+  const status = error?.response?.status;
+  const data = error?.response?.data;
+
+  if (typeof data === "string" && data.trim()) {
+    return `${providerName} request failed (${status || "unknown"}): ${data}`;
+  }
+
+  if (data?.error?.message) {
+    return `${providerName} request failed (${status || "unknown"}): ${data.error.message}`;
+  }
+
+  if (data?.message) {
+    return `${providerName} request failed (${status || "unknown"}): ${data.message}`;
+  }
+
+  if (data && typeof data === "object") {
+    return `${providerName} request failed (${status || "unknown"}): ${JSON.stringify(data)}`;
+  }
+
+  return `${providerName} request failed: ${error.message || "Unknown error"}`;
+}
+
 export async function generateReply({ message, history = [] }) {
   if (!message?.trim()) {
     throw new Error("message is required for generateReply");
@@ -50,32 +73,44 @@ export async function generateReply({ message, history = [] }) {
   const context = getBusinessContext();
   const normalizedHistory = normalizeHistory(history);
 
-  const response = await axios.post(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      model: env.OPENROUTER_MODEL || "mistralai/mistral-7b-instruct",
-      messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt(context),
-        },
-        ...normalizedHistory,
-        {
-          role: "user",
-          content: message.trim(),
-        },
-      ],
-      temperature: 0.5,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
+  let response;
 
-  const reply = response.data?.choices?.[0]?.message?.content?.trim();
+  try {
+    response = await axios.post(
+      "http://localhost:11434/api/chat",
+      {
+        model: env.OLLAMA_MODEL || "llama3",
+        messages: [
+          {
+            role: "system",
+            content: buildSystemPrompt(context),
+          },
+          ...normalizedHistory,
+          {
+            role: "user",
+            content: message.trim(),
+          },
+        ],
+        stream: false,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        timeout: 120000,
+      }
+    );
+  } catch (error) {
+    if (error.code === "ECONNABORTED") {
+      throw new Error(
+        "Ollama request timed out after 120000ms. The local model is responding too slowly for the current machine."
+      );
+    }
+
+    throw new Error(formatProviderError(error, "Ollama"));
+  }
+
+  const reply = response.data?.message?.content?.trim();
 
   if (!reply) {
     throw new Error("LLM returned an empty reply");

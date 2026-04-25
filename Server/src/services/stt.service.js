@@ -1,6 +1,5 @@
 import axios from "axios";
 import fs from "fs";
-import FormData from "form-data";
 import path from "path";
 import { env } from "../config/env.config.js";
 
@@ -19,28 +18,30 @@ export async function transcribeAudio(filePath) {
     throw new Error("Audio file must have a valid extension");
   }
 
-  const formData = new FormData();
-  formData.append("file", fs.createReadStream(filePath));
+  const fileStream = fs.createReadStream(filePath);
 
-  const response = await axios.post(
-    "https://api.deepgram.com/v1/listen?smart_format=true&model=nova-2",
-    formData,
+  const response = await axios.postForm(
+    "https://api.openai.com/v1/audio/transcriptions",
+    {
+      file: fileStream,
+      model: "whisper-1",
+      response_format: "verbose_json",
+    },
     {
       headers: {
-        ...formData.getHeaders(),
-        Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
+        Authorization: `Bearer ${env.OPENAI_API_KEY || env.OPENAI_TTS_API_KEY}`,
       },
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
     }
   );
 
-  const result = response.data?.results?.channels?.[0]?.alternatives?.[0];
+  const data = response.data;
 
   return {
-    transcript: result?.transcript || "",
-    language: response.data?.results?.channels?.[0]?.detected_language || "unknown",
-    duration: response.data?.metadata?.duration || 0,
-    segments: result?.words || [],
+    transcript: data?.text || "",
+    language: data?.language || "unknown",
+    duration: data?.duration || 0,
+    segments: data?.segments || [],
   };
 }
